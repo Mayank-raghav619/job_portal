@@ -1,31 +1,29 @@
 import streamlit as st
+import os
+import re
+import json
+import asyncio
+import nest_asyncio
+import warnings
+from dotenv import load_dotenv
+from pymongo import MongoClient
+import http.client
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceInstructEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
-from dotenv import load_dotenv
-import os
-import re
-import asyncio
-import nest_asyncio
-import warnings
 from langchain_groq import ChatGroq
-from pymongo import MongoClient
-import http.client
-import json
 
 # Load environment variables
 load_dotenv()
-
-# Setup
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 warnings.filterwarnings('ignore', category=UserWarning, module='torch')
 nest_asyncio.apply()
 
-# MongoDB init
-MONGO_URI = os.getenv("MONGO_URI")
+# MongoDB Setup
+MONGO_URI = os.getenv("MONGO_URI") or 'mongodb+srv://mishrajaikumar2207:EdJsXMvkhrnPxiIb@cluster0.uiuxrit.mongodb.net/?retryWrites=true&w=majority&tls=true'
 client = MongoClient(MONGO_URI)
 db = client["job_assistant"]
 logs_collection = db["user_logs"]
@@ -34,9 +32,11 @@ logs_collection = db["user_logs"]
 def init_groq_model():
     groq_api_key = os.getenv('GROQ_API_KEY')
     if not groq_api_key:
-        raise ValueError("GROQ_API_KEY not found in environment variables.")
+        raise ValueError("GROQ_API_KEY not set.")
     return ChatGroq(
-        groq_api_key=groq_api_key, model_name="llama3-70b-8192", temperature=0.2
+        groq_api_key=groq_api_key, 
+        model_name="llama3-8b-8192",  # Updated model name
+        temperature=0.2
     )
 
 llm_groq = init_groq_model()
@@ -98,12 +98,12 @@ def get_job_recommendations(features):
         connection.request("POST", f"/api/{jooble_api_key}", body, headers)
         response = connection.getresponse()
         jobs = json.loads(response.read()).get("jobs", [])
-        return [{
+        return [ {
             "title": job.get("title", "Job Title"),
             "company": job.get("company", "Company"),
             "link": job.get("link", "#"),
             "description": clean_job_description(job.get("snippet", "No Description"))
-        } for job in jobs]
+        } for job in jobs ]
     except Exception as e:
         st.error(f"Error fetching job data: {e}")
         return []
@@ -121,24 +121,13 @@ def handle_userinput(question):
             response = st.session_state.conversation.invoke({"question": question})
             answer = response.get('answer', 'No response')
             st.write(answer)
-            logs_collection.insert_one({
-                "query": question,
-                "response": answer
-            })
+            logs_collection.insert_one({"query": question, "response": answer})
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-def display_logs():
-    st.subheader("📝 Chat Logs")
-    logs = logs_collection.find().sort("_id", -1).limit(10)
-    for log in logs:
-        st.markdown(f"**Q:** {log.get('query', '')}")
-        st.markdown(f"**A:** {log.get('response', '')}")
-        st.markdown("---")
-
-# Main App
+# Streamlit Main App
 def main():
-    st.set_page_config(page_title="Job Assistant Chatbot", page_icon="💼")
+    st.set_page_config(page_title="Smart Job Assistant", page_icon="💼")
     st.title("💬 Smart Job Assistant")
 
     if "conversation" not in st.session_state:
@@ -148,7 +137,6 @@ def main():
         st.session_state.job_recommendations = []
 
     init_async()
-
     tab = st.sidebar.radio("Choose Tab", ["Chatbot", "Job Recommendations", "Chat Logs"])
 
     if tab == "Chatbot":
@@ -181,7 +169,12 @@ def main():
             st.info("Upload a resume first to get recommendations.")
 
     elif tab == "Chat Logs":
-        display_logs()
+        st.header("📝 User Chat Logs")
+        logs = logs_collection.find().sort("_id", -1).limit(50)
+        for log in logs:
+            st.markdown(f"**User:** {log.get('query')}")
+            st.markdown(f"**Bot:** {log.get('response')}")
+            st.markdown("---")
 
 if __name__ == "__main__":
     main()
