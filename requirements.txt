@@ -20,3 +20,4 @@ nest-asyncio==1.5.8
 altair==4
 google-genai
 google-generativeai
+pymongo
