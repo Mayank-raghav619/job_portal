@@ -5,31 +5,26 @@ from langchain_community.embeddings import HuggingFaceInstructEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
-from langchain_groq import ChatGroq
 from dotenv import load_dotenv
-from pymongo import MongoClient
-import http.client
-import json
 import os
 import re
 import asyncio
 import nest_asyncio
 import warnings
-from datetime import datetime
+from langchain_groq import ChatGroq
+from pymongo import MongoClient
+import http.client
+import json
 
 # Load environment variables
 load_dotenv()
 
-# Disable tokenizer parallelism
+# Setup
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# Suppress torch warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='torch')
-
-# Apply nest_asyncio for async compatibility
 nest_asyncio.apply()
 
-# MongoDB Setup
+# MongoDB init
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["job_assistant"]
@@ -41,7 +36,7 @@ def init_groq_model():
     if not groq_api_key:
         raise ValueError("GROQ_API_KEY not found in environment variables.")
     return ChatGroq(
-        groq_api_key=groq_api_key, model_name="llama-3-3-70b-versatile", temperature=0.2
+        groq_api_key=groq_api_key, model_name="llama3-70b-8192", temperature=0.2
     )
 
 llm_groq = init_groq_model()
@@ -53,7 +48,6 @@ def init_async():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-# PDF Text Extractor
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
@@ -65,19 +59,16 @@ def get_pdf_text(pdf_docs):
             st.error(f"Error reading PDF: {e}")
     return text
 
-# Text Splitter
 def get_text_chunks(text):
     splitter = CharacterTextSplitter(
         separator="\n", chunk_size=3000, chunk_overlap=200, length_function=len
     )
     return splitter.split_text(text)
 
-# Vectorstore Generator
 def get_vectorstore(text_chunks):
     embeddings = HuggingFaceInstructEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     return FAISS.from_texts(text_chunks, embeddings)
 
-# Conversation Chain
 def get_conversation_chain(vectorstore):
     memory = ConversationBufferMemory(
         memory_key='chat_history',
@@ -91,13 +82,11 @@ def get_conversation_chain(vectorstore):
         return_source_documents=True
     )
 
-# Feature Extractor
 def extract_job_features(text):
     skills = re.findall(r'\b(Java|Python|Data Science|Machine Learning|Deep Learning|Software Engineer|Data Engineer|AI|NLP|C\+\+|SQL|TensorFlow|Keras)\b', text, re.IGNORECASE)
     titles = re.findall(r'\b(Engineer|Data Scientist|Developer|Manager|Analyst|Consultant)\b', text, re.IGNORECASE)
     return list(set(skills + titles)) or ["General"]
 
-# Job Recommender
 def get_job_recommendations(features):
     host = "jooble.org"
     jooble_api_key = os.getenv("JOOBLE_API_KEY")
@@ -119,7 +108,6 @@ def get_job_recommendations(features):
         st.error(f"Error fetching job data: {e}")
         return []
 
-# Job Description Cleaner
 def clean_job_description(desc):
     desc = re.sub(r'&nbsp;|&#39;|<[^>]+>', '', desc)
     keywords = re.findall(r'\b(Python|Java|TensorFlow|Keras|Machine Learning|AI|NLP|Deep Learning|Engineer|Data Scientist|Developer|Analyst)\b', desc, re.IGNORECASE)
@@ -127,22 +115,26 @@ def clean_job_description(desc):
         desc = re.sub(rf'\b{word}\b', f"**{word}**", desc, flags=re.IGNORECASE)
     return desc
 
-# Chatbot Handler
 def handle_userinput(question):
     if question:
         try:
             response = st.session_state.conversation.invoke({"question": question})
             answer = response.get('answer', 'No response')
             st.write(answer)
-
             logs_collection.insert_one({
                 "query": question,
-                "response": answer,
-                "timestamp": datetime.now()
+                "response": answer
             })
-
         except Exception as e:
             st.error(f"Error: {str(e)}")
+
+def display_logs():
+    st.subheader("📝 Chat Logs")
+    logs = logs_collection.find().sort("_id", -1).limit(10)
+    for log in logs:
+        st.markdown(f"**Q:** {log.get('query', '')}")
+        st.markdown(f"**A:** {log.get('response', '')}")
+        st.markdown("---")
 
 # Main App
 def main():
@@ -156,7 +148,8 @@ def main():
         st.session_state.job_recommendations = []
 
     init_async()
-    tab = st.sidebar.radio("Choose Tab", ["Chatbot", "Job Recommendations", "Logs Viewer"])
+
+    tab = st.sidebar.radio("Choose Tab", ["Chatbot", "Job Recommendations", "Chat Logs"])
 
     if tab == "Chatbot":
         user_input = st.text_input("Ask something about your resume:")
@@ -187,19 +180,8 @@ def main():
         else:
             st.info("Upload a resume first to get recommendations.")
 
-    elif tab == "Logs Viewer":
-        st.header("📜 Chat & Job Query Logs")
-        logs = list(logs_collection.find().sort("_id", -1).limit(100))  # recent 100 logs
-
-        if logs:
-            for i, log in enumerate(logs):
-                with st.expander(f"Log #{len(logs) - i}"):
-                    st.markdown(f"**User Query:** {log.get('query', 'N/A')}")
-                    st.markdown(f"**Model Response:** {log.get('response', 'N/A')}")
-                    if "timestamp" in log:
-                        st.markdown(f"🕒 {log['timestamp']}")
-        else:
-            st.info("No logs available yet.")
+    elif tab == "Chat Logs":
+        display_logs()
 
 if __name__ == "__main__":
     main()
